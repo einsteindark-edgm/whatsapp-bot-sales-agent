@@ -1,0 +1,518 @@
+# Logging Configuration for WhatsApp Sales Assistant
+# ==================================================
+#
+# This configuration provides comprehensive logging for all components
+# of the multi-agent WhatsApp sales assistant system.
+#
+# Features:
+# - Structured JSON logging for production
+# - Colored console output for development
+# - Separate log files per service
+# - Log rotation and retention policies
+# - Integration with Pydantic Logfire
+# - Performance and security logging
+#
+# ==================================================
+
+version: 1
+disable_existing_loggers: false
+
+# =======================================================
+# Formatters
+# =======================================================
+formatters:
+  # Detailed JSON formatter for production and file output
+  json:
+    format: |
+      {
+        "timestamp": "%(asctime)s",
+        "level": "%(levelname)s",
+        "logger": "%(name)s",
+        "module": "%(module)s",
+        "function": "%(funcName)s",
+        "line": %(lineno)d,
+        "message": "%(message)s",
+        "service": "%(service)s",
+        "version": "%(version)s",
+        "environment": "%(environment)s",
+        "trace_id": "%(trace_id)s",
+        "user_id": "%(user_id)s",
+        "session_id": "%(session_id)s"
+      }
+    datefmt: "%Y-%m-%dT%H:%M:%S.%fZ"
+
+  # Colored console formatter for development
+  console:
+    format: "%(asctime)s | %(levelname)-8s | %(name)-20s | %(trace_id)-12s | %(message)s"
+    datefmt: "%H:%M:%S"
+
+  # Simple formatter for basic logging
+  simple:
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+
+  # Performance formatter for timing logs
+  performance:
+    format: "%(asctime)s | PERF | %(name)s | %(funcName)s | %(message)s | duration=%(duration).3fs"
+    datefmt: "%H:%M:%S"
+
+  # Security formatter for audit logs
+  security:
+    format: "%(asctime)s | SECURITY | %(levelname)s | %(name)s | %(message)s | user=%(user_id)s | ip=%(client_ip)s"
+    datefmt: "%Y-%m-%dT%H:%M:%S.%fZ"
+
+# =======================================================
+# Filters
+# =======================================================
+filters:
+  # Filter to add contextual information
+  context_filter:
+    (): shared.observability.ContextFilter
+
+  # Filter to exclude health check logs in production
+  health_check_filter:
+    (): shared.observability.HealthCheckFilter
+
+  # Filter for sensitive data redaction
+  sensitive_data_filter:
+    (): shared.observability.SensitiveDataFilter
+
+# =======================================================
+# Handlers
+# =======================================================
+handlers:
+  # Console handler for development
+  console:
+    class: logging.StreamHandler
+    level: DEBUG
+    formatter: console
+    stream: ext://sys.stdout
+    filters: [context_filter, sensitive_data_filter]
+
+  # Console handler for production (structured)
+  console_json:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: json
+    stream: ext://sys.stdout
+    filters: [context_filter, health_check_filter, sensitive_data_filter]
+
+  # File handler for general application logs
+  file_app:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: json
+    filename: logs/app.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 10
+    filters: [context_filter, sensitive_data_filter]
+
+  # File handler for error logs
+  file_error:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: json
+    filename: logs/error.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    filters: [context_filter, sensitive_data_filter]
+
+  # File handler for classifier service
+  file_classifier:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: logs/classifier.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 10
+    filters: [context_filter, sensitive_data_filter]
+
+  # File handler for orchestrator service
+  file_orchestrator:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: logs/orchestrator.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 10
+    filters: [context_filter, sensitive_data_filter]
+
+  # File handler for CLI logs
+  file_cli:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: logs/cli.log
+    maxBytes: 5242880   # 5MB
+    backupCount: 5
+    filters: [context_filter, sensitive_data_filter]
+
+  # File handler for performance logs
+  file_performance:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: performance
+    filename: logs/performance.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 10
+    filters: [context_filter]
+
+  # File handler for security/audit logs
+  file_security:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: security
+    filename: logs/security.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 20     # Keep longer for security
+    filters: [context_filter]
+
+  # File handler for A2A protocol logs
+  file_a2a:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: logs/a2a.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 10
+    filters: [context_filter, sensitive_data_filter]
+
+  # Syslog handler for production monitoring
+  syslog:
+    class: logging.handlers.SysLogHandler
+    level: WARNING
+    formatter: json
+    address: ['localhost', 514]
+    facility: local0
+    filters: [context_filter, health_check_filter, sensitive_data_filter]
+
+# =======================================================
+# Loggers
+# =======================================================
+loggers:
+  # Root logger
+  root:
+    level: INFO
+    handlers: [console, file_app, file_error]
+    propagate: false
+
+  # Application loggers
+  agents:
+    level: DEBUG
+    handlers: [console, file_app]
+    propagate: false
+
+  # Classifier agent logger
+  agents.classifier:
+    level: DEBUG
+    handlers: [console, file_classifier, file_a2a]
+    propagate: false
+
+  # Orchestrator agent logger
+  agents.orchestrator:
+    level: DEBUG
+    handlers: [console, file_orchestrator, file_a2a]
+    propagate: false
+
+  # CLI logger
+  cli:
+    level: DEBUG
+    handlers: [console, file_cli]
+    propagate: false
+
+  # Shared components logger
+  shared:
+    level: DEBUG
+    handlers: [console, file_app]
+    propagate: false
+
+  # A2A protocol logger
+  shared.a2a_protocol:
+    level: DEBUG
+    handlers: [console, file_a2a]
+    propagate: false
+
+  # Observability logger
+  shared.observability:
+    level: INFO
+    handlers: [console, file_app]
+    propagate: false
+
+  # Utils logger
+  shared.utils:
+    level: INFO
+    handlers: [console, file_app]
+    propagate: false
+
+  # Configuration logger
+  config:
+    level: INFO
+    handlers: [console, file_app]
+    propagate: false
+
+  # Performance logger
+  performance:
+    level: INFO
+    handlers: [file_performance]
+    propagate: false
+
+  # Security logger
+  security:
+    level: INFO
+    handlers: [file_security]
+    propagate: false
+
+  # HTTP request logger
+  uvicorn.access:
+    level: INFO
+    handlers: [console, file_app]
+    propagate: false
+
+  # Uvicorn error logger
+  uvicorn.error:
+    level: WARNING
+    handlers: [console, file_error]
+    propagate: false
+
+  # FastAPI logger
+  fastapi:
+    level: INFO
+    handlers: [console, file_app]
+    propagate: false
+
+  # Httpx logger (for HTTP client requests)
+  httpx:
+    level: WARNING
+    handlers: [console, file_app]
+    propagate: false
+
+  # Pydantic logger
+  pydantic:
+    level: WARNING
+    handlers: [console, file_app]
+    propagate: false
+
+  # Google ADK logger
+  google.adk:
+    level: INFO
+    handlers: [console, file_orchestrator]
+    propagate: false
+
+  # PydanticAI logger
+  pydantic_ai:
+    level: INFO
+    handlers: [console, file_classifier]
+    propagate: false
+
+  # Gemini client logger
+  gemini:
+    level: INFO
+    handlers: [console, file_classifier]
+    propagate: false
+
+# =======================================================
+# Environment-specific configurations
+# =======================================================
+
+# Development environment overrides
+development:
+  handlers:
+    console:
+      level: DEBUG
+      formatter: console
+    file_app:
+      level: DEBUG
+    file_error:
+      level: DEBUG
+  
+  loggers:
+    root:
+      level: DEBUG
+      handlers: [console]
+    agents:
+      level: DEBUG
+    shared:
+      level: DEBUG
+
+# Production environment overrides  
+production:
+  handlers:
+    console:
+      class: logging.StreamHandler
+      level: WARNING
+      formatter: json
+      filters: [context_filter, health_check_filter, sensitive_data_filter]
+    
+    syslog:
+      level: ERROR
+  
+  loggers:
+    root:
+      level: INFO
+      handlers: [console_json, file_app, file_error, syslog]
+    
+    # Reduce verbosity in production
+    httpx:
+      level: ERROR
+    pydantic:
+      level: ERROR
+    uvicorn.access:
+      level: WARNING
+
+# Testing environment overrides
+testing:
+  handlers:
+    console:
+      level: DEBUG
+      formatter: simple
+    
+    # Disable file handlers during testing
+    file_app:
+      class: logging.NullHandler
+    file_error:
+      class: logging.NullHandler
+    file_classifier:
+      class: logging.NullHandler
+    file_orchestrator:
+      class: logging.NullHandler
+    file_cli:
+      class: logging.NullHandler
+  
+  loggers:
+    root:
+      level: DEBUG
+      handlers: [console]
+    
+    # Silence noisy loggers during testing
+    httpx:
+      level: CRITICAL
+    uvicorn:
+      level: CRITICAL
+
+# =======================================================
+# Docker environment configuration
+# =======================================================
+docker:
+  handlers:
+    # Only console output in Docker (logs collected by Docker)
+    console:
+      class: logging.StreamHandler
+      level: INFO
+      formatter: json
+      stream: ext://sys.stdout
+      filters: [context_filter, health_check_filter, sensitive_data_filter]
+  
+  loggers:
+    root:
+      level: INFO
+      handlers: [console]
+    agents:
+      level: INFO
+      handlers: [console]
+    shared:
+      level: INFO
+      handlers: [console]
+
+# =======================================================
+# Log level mapping for different components
+# =======================================================
+levels:
+  CRITICAL: 50
+  ERROR: 40
+  WARNING: 30
+  INFO: 20
+  DEBUG: 10
+  NOTSET: 0
+
+# Component-specific log levels
+component_levels:
+  classifier:
+    development: DEBUG
+    production: INFO
+    testing: DEBUG
+  
+  orchestrator:
+    development: DEBUG
+    production: INFO
+    testing: DEBUG
+  
+  cli:
+    development: DEBUG
+    production: INFO
+    testing: DEBUG
+  
+  a2a_protocol:
+    development: DEBUG
+    production: INFO
+    testing: DEBUG
+  
+  http_client:
+    development: INFO
+    production: WARNING
+    testing: CRITICAL
+
+# =======================================================
+# Sensitive data patterns for redaction
+# =======================================================
+sensitive_patterns:
+  - "password"
+  - "token"
+  - "key"
+  - "secret"
+  - "credential"
+  - "auth"
+  - "api_key"
+  - "gemini_api_key"
+
+# =======================================================
+# Log retention policies
+# =======================================================
+retention:
+  app_logs: 30        # days
+  error_logs: 90      # days
+  security_logs: 365  # days
+  performance_logs: 7 # days
+  debug_logs: 3       # days
+
+# =======================================================
+# Monitoring and alerting configuration
+# =======================================================
+monitoring:
+  # Log patterns that should trigger alerts
+  alert_patterns:
+    - level: ERROR
+      pattern: "Classification failed"
+      severity: medium
+    
+    - level: ERROR  
+      pattern: "A2A communication failed"
+      severity: high
+    
+    - level: CRITICAL
+      pattern: "Service unavailable"
+      severity: critical
+    
+    - level: WARNING
+      pattern: "High response time"
+      threshold: 5.0  # seconds
+      severity: low
+
+  # Metrics to extract from logs
+  metrics:
+    - name: request_count
+      pattern: "Processing request"
+      labels: [service, endpoint]
+    
+    - name: response_time
+      pattern: "Request completed"
+      labels: [service, endpoint, status_code]
+      value_field: duration
+    
+    - name: error_rate
+      pattern: "ERROR"
+      labels: [service, error_type]
+    
+    - name: classification_accuracy
+      pattern: "Classification completed"
+      labels: [classification_label]
+      value_field: confidence

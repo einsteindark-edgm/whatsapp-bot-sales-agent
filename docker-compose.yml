@@ -1,0 +1,144 @@
+version: '3.8'
+
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: agents/orchestrator/Dockerfile
+    container_name: whatsapp-orchestrator
+    ports:
+      - "${ORCHESTRATOR_PORT:-8080}:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ORCHESTRATOR_HOST=0.0.0.0
+      - ORCHESTRATOR_PORT=8000
+      - CLASSIFIER_HOST=classifier
+      - CLASSIFIER_PORT=8001
+      - DOCKER_NETWORK=${DOCKER_NETWORK:-whatsapp-assistant-network}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TRACE_ENABLED=${TRACE_ENABLED:-true}
+      - MODEL_NAME=${MODEL_NAME:-google-gla:gemini-2.0-flash}
+      - API_TITLE=${API_TITLE:-WhatsApp Sales Assistant}
+      - API_VERSION=${API_VERSION:-1.0.0}
+      - DOCKER_CONTAINER=true
+      - DEV_MODE=${DEV_MODE:-false}
+      - HTTP_TIMEOUT=${HTTP_TIMEOUT:-30}
+      - HTTP_RETRIES=${HTTP_RETRIES:-3}
+      - A2A_TIMEOUT=${A2A_TIMEOUT:-30}
+      - A2A_RETRIES=${A2A_RETRIES:-3}
+    networks:
+      - whatsapp-assistant-network
+    depends_on:
+      - classifier
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    volumes:
+      - ./config/logging.yaml:/app/config/logging.yaml:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.orchestrator.rule=Host(`orchestrator.localhost`)"
+      - "traefik.http.services.orchestrator.loadbalancer.server.port=8000"
+
+  classifier:
+    build:
+      context: .
+      dockerfile: agents/classifier/Dockerfile
+    container_name: whatsapp-classifier
+    ports:
+      - "${CLASSIFIER_PORT:-8081}:8001"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - CLASSIFIER_HOST=0.0.0.0
+      - CLASSIFIER_PORT=8001
+      - DOCKER_NETWORK=${DOCKER_NETWORK:-whatsapp-assistant-network}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TRACE_ENABLED=${TRACE_ENABLED:-true}
+      - MODEL_NAME=${MODEL_NAME:-google-gla:gemini-2.0-flash}
+      - API_TITLE=${API_TITLE:-WhatsApp Sales Assistant}
+      - API_VERSION=${API_VERSION:-1.0.0}
+      - DOCKER_CONTAINER=true
+      - DEV_MODE=${DEV_MODE:-false}
+      - CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.7}
+      - GEMINI_TEMPERATURE=${GEMINI_TEMPERATURE:-0.0}
+      - GEMINI_MAX_TOKENS=${GEMINI_MAX_TOKENS:-100}
+    networks:
+      - whatsapp-assistant-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    volumes:
+      - ./config/logging.yaml:/app/config/logging.yaml:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.classifier.rule=Host(`classifier.localhost`)"
+      - "traefik.http.services.classifier.loadbalancer.server.port=8001"
+
+networks:
+  whatsapp-assistant-network:
+    driver: bridge
+    name: ${DOCKER_NETWORK:-whatsapp-assistant-network}
+
+volumes:
+  app_data:
+    driver: local
+
+# =============================================================================
+# Docker Compose Configuration for WhatsApp Sales Assistant
+# =============================================================================
+#
+# This configuration defines a multi-container setup with:
+# - Orchestrator Agent (Google ADK) on port 8080
+# - Classifier Agent (PydanticAI) on port 8081
+# - Shared network for A2A communication
+# - Health checks for both services
+# - Environment variable injection from .env file
+#
+# Usage:
+#   Development:
+#     docker-compose up --build
+#   
+#   Production:
+#     docker-compose -f docker-compose.yml up -d
+#
+#   Stop services:
+#     docker-compose down
+#
+#   View logs:
+#     docker-compose logs -f [service_name]
+#
+#   Scale services:
+#     docker-compose up --scale classifier=2
+#
+# Services:
+#   - orchestrator: Workflow orchestration using Google ADK
+#   - classifier: Message classification using PydanticAI + Gemini
+#
+# Networks:
+#   - whatsapp-assistant-network: Bridge network for inter-service communication
+#
+# Health Checks:
+#   - Both services expose /health endpoints
+#   - Automatic restart on failure
+#   - Startup grace period of 40 seconds
+#
+# Environment Variables:
+#   - Load from .env file (copy from .env.example)
+#   - Override with system environment variables
+#   - Docker-specific settings automatically applied
+#
+# Security:
+#   - Services only expose necessary ports
+#   - Internal communication via docker network
+#   - Health checks ensure service availability
+#   - Read-only volume mounts for configuration
+#
+# =============================================================================

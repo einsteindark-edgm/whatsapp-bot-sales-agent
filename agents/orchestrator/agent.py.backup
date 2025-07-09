@@ -1,0 +1,492 @@
+"""
+Workflow Orchestrator Agent Implementation.
+
+This module implements the workflow orchestrator agent using Google ADK BaseAgent
+for managing the conversation flow and coordinating with the classifier agent.
+"""
+
+import time
+from typing import AsyncGenerator, Dict, Any, Optional
+from datetime import datetime
+
+from google.adk.sessions import InMemorySessionService
+
+from .domain.models import (
+    ConversationContext,
+    WorkflowRequest,
+    WorkflowResponse,
+    WorkflowStatus,
+    ConversationState,
+    ResponseType,
+    OrchestrationMetrics,
+    OrchestrationConfig,
+)
+from .adapters.outbound.http_a2a_client import A2AHttpClient
+from shared.observability import get_logger
+from shared.a2a_protocol import ClassificationRequest
+
+
+# Configure logger
+logger = get_logger(__name__)
+
+
+class WorkflowOrchestrator:
+    """
+    Custom orchestrator for WhatsApp sales workflow.
+
+    This agent implements custom orchestration logic for managing conversations 
+    and coordinating with the classifier agent using Google ADK components.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        config: Optional[OrchestrationConfig] = None,
+        a2a_client: Optional[A2AHttpClient] = None,
+    ):
+        """
+        Initialize the workflow orchestrator.
+
+        Args:
+            name: Agent name
+            config: Optional orchestration configuration
+            a2a_client: Optional A2A HTTP client
+        """
+        # Set our attributes
+        self.name = name
+        self._config = config or OrchestrationConfig()
+        self.a2a_client = a2a_client or A2AHttpClient(
+            classifier_url=self._config.classifier_url,
+            timeout=self._config.classification_timeout,
+            retries=self._config.classification_retries,
+        )
+        self.metrics = OrchestrationMetrics()
+        self.conversations: Dict[str, ConversationContext] = {}
+
+        logger.info(
+            "Workflow orchestrator initialized",
+            name=name,
+            classifier_url=self._config.classifier_url,
+            model_name=self._config.model_name,
+        )
+
+    async def health_check(self) -> Dict[str, Any]:
+        """
+        Perform health check of the orchestrator.
+
+        Returns:
+            Health check results
+        """
+        try:
+            # Check A2A client connection (simplified)
+            classifier_healthy = True  # Simplified for now
+            
+            return {
+                "status": "healthy" if classifier_healthy else "degraded",
+                "orchestrator": "healthy",
+                "classifier_connection": "healthy" if classifier_healthy else "unhealthy",
+                "active_conversations": len(self.conversations),
+                "total_requests": self.metrics.total_requests,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        except Exception as e:
+            logger.error("Health check failed", error=str(e))
+            return {
+                "status": "unhealthy",
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+                "Starting workflow orchestration",
+                user_message_length=len(user_message),
+                user_id=user_id,
+                session_id=session_id,
+                trace_id=trace_id,
+            )
+
+            # Get or create conversation context
+            conversation_key = f"{user_id}:{session_id}"
+            if conversation_key not in self.conversations:
+                self.conversations[conversation_key] = ConversationContext(
+                    user_id=user_id, session_id=session_id
+                )
+
+            conversation = self.conversations[conversation_key]
+            conversation.add_message("user", user_message)
+            conversation.update_state(ConversationState.WAITING_FOR_CLASSIFICATION)
+
+            # Step 1: Send message to classifier via A2A protocol
+            logger.info(f"[{self.name}] Sending message to classifier for classification")
+
+            classification_request = ClassificationRequest(
+                sender_agent="orchestrator",
+                receiver_agent="classifier",
+                trace_id=trace_id,
+                payload={"text": user_message},
+            )
+
+            try:
+                # Send classification request
+                classification_response = await self.a2a_client.send_classification_request(
+                    classification_request
+                )
+
+                # Store classification in session and conversation
+                classification_data = classification_response.payload
+                ctx.session.state["classification"] = classification_data
+                conversation.update_classification(classification_data)
+
+                logger.info(
+                    f"[{self.name}] Classification received",
+                    label=classification_data.get("label"),
+                    confidence=classification_data.get("confidence"),
+                )
+
+                # Update conversation state
+                conversation.update_state(ConversationState.PROCESSING_RESPONSE)
+
+                # Step 2: Generate response based on classification
+                response_text = self._generate_response(
+                    user_message=user_message, classification=classification_data
+                )
+
+                # Add response to conversation
+                conversation.add_message("assistant", response_text)
+                conversation.update_state(ConversationState.COMPLETED)
+
+                # Step 3: Yield final response event
+                yield Event(content=response_text, author=self.name, is_final=True)
+
+                # Update metrics
+                self._update_metrics(
+                    classification_data=classification_data,
+                    processing_time=time.time() - start_time,
+                    success=True,
+                )
+
+                logger.info(
+                    f"[{self.name}] Workflow completed successfully",
+                    processing_time=time.time() - start_time,
+                    response_length=len(response_text),
+                )
+
+            except Exception as e:
+                # Handle classification error
+                logger.error(
+                    f"[{self.name}] Classification failed", error=str(e), trace_id=trace_id
+                )
+
+                # Update conversation state
+                conversation.update_state(ConversationState.ERROR)
+
+                # Generate error response
+                error_response = self._generate_error_response(str(e))
+                conversation.add_message("assistant", error_response)
+
+                # Update metrics
+                self._update_metrics(
+                    classification_data=None,
+                    processing_time=time.time() - start_time,
+                    success=False,
+                )
+
+                yield Event(content=error_response, author=self.name, is_final=True)
+
+        except Exception as e:
+            # Handle unexpected errors
+            logger.error(f"[{self.name}] Unexpected error in workflow", error=str(e), exc_info=True)
+
+            # Update metrics
+            self._update_metrics(
+                classification_data=None, processing_time=time.time() - start_time, success=False
+            )
+
+            yield Event(
+                content="I encountered an unexpected error. Please try again.",
+                author=self.name,
+                is_final=True,
+            )
+
+    def _generate_response(self, user_message: str, classification: Dict[str, Any]) -> str:
+        """
+        Generate response based on classification.
+
+        Args:
+            user_message: Original user message
+            classification: Classification result
+
+        Returns:
+            Generated response text
+        """
+        label = classification.get("label", "unknown")
+        confidence = classification.get("confidence", 0.0)
+
+        # Generate response based on classification
+        if label == "product_information":
+            response = f"I can help you with product information. Regarding your question: '{user_message}' - I understand you're looking for product details. Let me assist you with that."
+        elif label == "PQR":
+            response = f"I understand you have a query or concern. About your message: '{user_message}' - I'm here to help resolve this for you. Let me look into this matter."
+        else:
+            response = f"I received your message: '{user_message}' - I'm processing this and will get back to you with the appropriate information."
+
+        # Add confidence information if configured
+        if self._config.include_classification_in_response and confidence > 0:
+            if confidence < self._config.handoff_threshold:
+                response += (
+                    "\n\n[Note: This message may require human assistance for better support]"
+                )
+
+        return response
+
+    def _generate_error_response(self, error_message: str) -> str:
+        """
+        Generate error response.
+
+        Args:
+            error_message: Error message
+
+        Returns:
+            Error response text
+        """
+        return "I apologize, but I'm having trouble processing your message right now. Please try again in a moment, or contact our support team if the issue persists."
+
+    def _update_metrics(
+        self, classification_data: Optional[Dict[str, Any]], processing_time: float, success: bool
+    ):
+        """
+        Update orchestration metrics.
+
+        Args:
+            classification_data: Classification result
+            processing_time: Processing time in seconds
+            success: Whether the operation was successful
+        """
+        if not self._config.enable_metrics:
+            return
+
+        # Update request metrics
+        self.metrics.total_requests += 1
+
+        if success:
+            self.metrics.successful_requests += 1
+        else:
+            self.metrics.failed_requests += 1
+
+        # Update response type metrics
+        if classification_data:
+            label = classification_data.get("label")
+            if label == "product_information":
+                self.metrics.product_information_responses += 1
+            elif label == "PQR":
+                self.metrics.pqr_responses += 1
+        else:
+            self.metrics.error_responses += 1
+
+        # Update processing time
+        current_avg = self.metrics.average_processing_time
+        total = self.metrics.total_requests
+        self.metrics.average_processing_time = (current_avg * (total - 1) + processing_time) / total
+
+    async def process_workflow_request(
+        self, request: WorkflowRequest, trace_id: str
+    ) -> WorkflowResponse:
+        """
+        Process a workflow request.
+
+        Args:
+            request: Workflow request
+            trace_id: Trace ID for observability
+
+        Returns:
+            Workflow response
+        """
+        start_time = time.time()
+
+        try:
+            # Create session service and session
+            session_service = InMemorySessionService()
+            session = await session_service.create_session(
+                app_name=self._config.app_name,
+                user_id=request.user_id,
+                session_id=request.session_id,
+                state={
+                    "user_message": request.user_message,
+                    "user_id": request.user_id,
+                    "session_id": request.session_id,
+                    "trace_id": trace_id,
+                },
+            )
+
+            # Create invocation context
+            ctx = InvocationContext(session=session)
+
+            # Run orchestration
+            final_response = None
+            async for event in self._run_async_impl(ctx):
+                if event.is_final:
+                    final_response = event.content
+                    break
+
+            if not final_response:
+                final_response = "No response generated"
+
+            # Get classification from session
+            classification = session.state.get("classification")
+
+            # Create response
+            response = WorkflowResponse(
+                request_id=request.request_id,
+                response=final_response,
+                response_type=self._determine_response_type(classification),
+                classification=classification if request.include_classification else None,
+                workflow_status=WorkflowStatus.COMPLETED,
+                conversation_state=ConversationState.COMPLETED,
+                processing_time=time.time() - start_time,
+                success=True,
+            )
+
+            return response
+
+        except Exception as e:
+            logger.error(
+                "Workflow request processing failed",
+                error=str(e),
+                request_id=request.request_id,
+                trace_id=trace_id,
+            )
+
+            # Create error response
+            return WorkflowResponse(
+                request_id=request.request_id,
+                response="I apologize, but I encountered an error processing your request.",
+                response_type=ResponseType.ERROR_RESPONSE,
+                workflow_status=WorkflowStatus.FAILED,
+                conversation_state=ConversationState.ERROR,
+                processing_time=time.time() - start_time,
+                success=False,
+                error_message=str(e),
+            )
+
+    def _determine_response_type(self, classification: Optional[Dict[str, Any]]) -> ResponseType:
+        """
+        Determine response type based on classification.
+
+        Args:
+            classification: Classification result
+
+        Returns:
+            Response type
+        """
+        if not classification:
+            return ResponseType.ERROR_RESPONSE
+
+        label = classification.get("label")
+        confidence = classification.get("confidence", 0.0)
+
+        if confidence < self._config.handoff_threshold:
+            return ResponseType.HANDOFF_RESPONSE
+        elif label == "product_information":
+            return ResponseType.PRODUCT_INFORMATION_RESPONSE
+        elif label == "PQR":
+            return ResponseType.PQR_RESPONSE
+        else:
+            return ResponseType.ERROR_RESPONSE
+
+    async def health_check(self) -> Dict[str, Any]:
+        """
+        Perform health check of the orchestrator.
+
+        Returns:
+            Health check results
+        """
+        try:
+            # Check A2A client health
+            a2a_health = await self.a2a_client.health_check()
+
+            # Check conversation storage
+            conversation_count = len(self.conversations)
+
+            return {
+                "status": "healthy" if a2a_health.get("status") == "healthy" else "unhealthy",
+                "agent_name": self.name,
+                "classifier_connection": a2a_health.get("status", "unknown"),
+                "active_conversations": conversation_count,
+                "total_requests": self.metrics.total_requests,
+                "success_rate": self.metrics.success_rate,
+                "average_processing_time": self.metrics.average_processing_time,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
+        except Exception as e:
+            logger.error("Health check failed", error=str(e))
+            return {
+                "status": "unhealthy",
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
+    def get_metrics(self) -> OrchestrationMetrics:
+        """Get current orchestration metrics."""
+        return self.metrics
+
+    def reset_metrics(self):
+        """Reset orchestration metrics."""
+        self.metrics = OrchestrationMetrics()
+        logger.info("Orchestration metrics reset")
+
+    def get_conversation(self, user_id: str, session_id: str) -> Optional[ConversationContext]:
+        """Get conversation context."""
+        conversation_key = f"{user_id}:{session_id}"
+        return self.conversations.get(conversation_key)
+
+    def clear_conversation(self, user_id: str, session_id: str):
+        """Clear conversation context."""
+        conversation_key = f"{user_id}:{session_id}"
+        if conversation_key in self.conversations:
+            del self.conversations[conversation_key]
+            logger.info("Conversation cleared", user_id=user_id, session_id=session_id)
+
+
+# Global orchestrator instance
+orchestrator_agent = WorkflowOrchestrator(name="WorkflowOrchestrator", config=OrchestrationConfig())
+
+
+async def process_workflow_request_async(
+    request: WorkflowRequest, trace_id: str
+) -> WorkflowResponse:
+    """
+    Async function for workflow request processing.
+
+    Args:
+        request: Workflow request
+        trace_id: Trace ID for observability
+
+    Returns:
+        Workflow response
+    """
+    return await orchestrator_agent.process_workflow_request(request, trace_id)
+
+
+def get_orchestrator_metrics() -> OrchestrationMetrics:
+    """Get current orchestrator metrics."""
+    return orchestrator_agent.get_metrics()
+
+
+def reset_orchestrator_metrics():
+    """Reset orchestrator metrics."""
+    orchestrator_agent.reset_metrics()
+
+
+async def orchestrator_health_check() -> Dict[str, Any]:
+    """Perform orchestrator health check."""
+    return await orchestrator_agent.health_check()
+
+
+# Export commonly used functions
+__all__ = [
+    "WorkflowOrchestrator",
+    "orchestrator_agent",
+    "process_workflow_request_async",
+    "get_orchestrator_metrics",
+    "reset_orchestrator_metrics",
+    "orchestrator_health_check",
+]

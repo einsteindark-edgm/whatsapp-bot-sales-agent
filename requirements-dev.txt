@@ -1,0 +1,19 @@
+# Development dependencies for linting, formatting, and testing
+black==24.10.0
+ruff==0.8.0
+mypy==1.13.0
+pytest==8.3.3
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+pytest-mock==3.14.0
+
+# Basic dependencies for validation
+pydantic==2.10.3
+fastapi==0.115.6
+uvicorn==0.32.1
+httpx==0.28.1
+rich==13.9.4
+click==8.1.7
+
+# Type checking
+types-requests==2.32.0.20241016
