@@ -21,7 +21,6 @@ from agents.classifier.agent import (
 from agents.classifier.domain.models import (
     ClassificationRequest,
     ClassificationResponse,
-    ClassificationError,
 )
 from shared.a2a_protocol import (
     ClassificationRequest as A2AClassificationRequest,

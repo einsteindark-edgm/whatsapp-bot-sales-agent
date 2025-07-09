@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, patch
 
 from agents.classifier.agent import classifier_agent, ClassifierAgent
 from agents.classifier.domain.models import ClassificationRequest, ClassificationResponse
-from shared.a2a_protocol import A2AMessage, MessageType
 from tests.conftest import MockTestModel
 
 

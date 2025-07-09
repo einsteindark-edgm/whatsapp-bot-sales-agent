@@ -20,7 +20,6 @@ sys.path.insert(0, str(project_root))
 from config.settings import Settings
 from shared.a2a_protocol import A2AMessage, MessageType
 from shared.observability import get_logger
-from shared.observability_enhanced import get_logger as get_enhanced_logger
 from shared.utils import generate_trace_id
 
 

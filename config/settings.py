@@ -49,6 +49,15 @@ class Settings(BaseSettings):
     # Model Configuration
     model_name: str = Field(default="google-gla:gemini-2.0-flash", description="Gemini model name")
 
+    # WhatsApp Business API Configuration
+    whatsapp_access_token: str = Field(default="", description="WhatsApp Business API access token")
+    whatsapp_phone_number_id: str = Field(default="", description="WhatsApp phone number ID")
+    whatsapp_business_account_id: str = Field(default="", description="WhatsApp Business Account ID")
+    whatsapp_webhook_verify_token: str = Field(default="", description="Webhook verification token")
+    whatsapp_app_secret: str = Field(default="", description="WhatsApp app secret for webhook signature")
+    whatsapp_api_version: str = Field(default="v18.0", description="WhatsApp API version")
+    whatsapp_api_base_url: str = Field(default="https://graph.facebook.com", description="WhatsApp API base URL")
+
     # FastAPI Configuration
     api_title: str = Field(default="WhatsApp Sales Assistant", description="API title")
     api_version: str = Field(default="1.0.0", description="API version")
@@ -109,6 +118,13 @@ class Settings(BaseSettings):
             "otel_exporter_endpoint": {"env": "OTEL_EXPORTER_ENDPOINT"},
             "otel_headers": {"env": "OTEL_HEADERS"},
             "model_name": {"env": "MODEL_NAME"},
+            "whatsapp_access_token": {"env": "WHATSAPP_ACCESS_TOKEN"},
+            "whatsapp_phone_number_id": {"env": "WHATSAPP_PHONE_NUMBER_ID"},
+            "whatsapp_business_account_id": {"env": "WHATSAPP_BUSINESS_ACCOUNT_ID"},
+            "whatsapp_webhook_verify_token": {"env": "WHATSAPP_WEBHOOK_VERIFY_TOKEN"},
+            "whatsapp_app_secret": {"env": "WHATSAPP_APP_SECRET"},
+            "whatsapp_api_version": {"env": "WHATSAPP_API_VERSION"},
+            "whatsapp_api_base_url": {"env": "WHATSAPP_API_BASE_URL"},
             "api_title": {"env": "API_TITLE"},
             "api_version": {"env": "API_VERSION"},
             "cli_host": {"env": "CLI_HOST"},

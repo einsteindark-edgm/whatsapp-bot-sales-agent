@@ -6,10 +6,8 @@ This test verifies that the basic unit test infrastructure is working
 and that we can import and instantiate the main components.
 """
 
-import pytest
 import sys
 import os
-from unittest.mock import Mock, AsyncMock, patch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from shared.a2a_protocol import A2AMessage, MessageType

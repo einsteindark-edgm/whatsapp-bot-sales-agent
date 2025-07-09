@@ -8,7 +8,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from shared.observability_enhanced import enhanced_observability
 
 

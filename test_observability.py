@@ -4,8 +4,6 @@ Script para probar y demostrar la observabilidad del sistema
 """
 import asyncio
 import httpx
-import json
-import time
 from datetime import datetime
 
 async def test_observability():
@@ -81,12 +79,12 @@ async def test_observability():
                 metrics = response.json()
                 
                 print(f"🤖 Total LLM traces: {metrics['total_llm_traces']}")
-                print(f"🔌 Integraciones:")
+                print("🔌 Integraciones:")
                 for integration, enabled in metrics['integrations'].items():
                     status = "✅ Habilitado" if enabled else "⚪ Deshabilitado"
                     print(f"   - {integration}: {status}")
                 
-                print(f"\n📈 Traces Recientes:")
+                print("\n📈 Traces Recientes:")
                 for trace in metrics['recent_traces'][-3:]:  # Últimos 3
                     print(f"   - ID: {trace['trace_id'][:8]}...")
                     print(f"     Prompt: '{trace['prompt'][:50]}{'...' if len(trace['prompt']) > 50 else ''}'")
@@ -112,12 +110,12 @@ async def test_observability():
                 metrics = response.json()
                 
                 print(f"🎯 Total LLM traces: {metrics['total_llm_traces']}")
-                print(f"🔌 Integraciones:")
+                print("🔌 Integraciones:")
                 for integration, enabled in metrics['integrations'].items():
                     status = "✅ Habilitado" if enabled else "⚪ Deshabilitado"
                     print(f"   - {integration}: {status}")
                 
-                print(f"\n🛠️  Información del Servicio:")
+                print("\n🛠️  Información del Servicio:")
                 service_info = metrics['service_info']
                 print(f"   - Nombre: {service_info['name']}")
                 print(f"   - Versión: {service_info['version']}")

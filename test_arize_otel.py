@@ -19,7 +19,7 @@ def test_arize_integration():
     
     # Check integration status
     metrics = enhanced_observability.get_metrics_summary()
-    print(f"📊 Current integrations:")
+    print("📊 Current integrations:")
     print(f"  - Logfire enabled: {metrics['integrations']['logfire_enabled']}")
     print(f"  - Arize enabled: {metrics['integrations']['arize_enabled']}")
     print(f"  - Arize OTel enabled: {metrics['integrations']['arize_otel_enabled']}")
@@ -51,19 +51,19 @@ def test_arize_integration():
         }
     )
     
-    print(f"📤 Sending test trace to Arize...")
+    print("📤 Sending test trace to Arize...")
     
     # Send to Arize
     try:
         enhanced_observability.arize.log_llm_trace(test_trace)
-        print(f"✅ Test trace sent successfully")
+        print("✅ Test trace sent successfully")
         
         # Wait a moment for processing
         time.sleep(2)
         
         # Check updated metrics
         updated_metrics = enhanced_observability.get_metrics_summary()
-        print(f"\n📊 Updated metrics:")
+        print("\n📊 Updated metrics:")
         print(f"  - Total traces: {updated_metrics['total_llm_traces']}")
         print(f"  - Recent traces: {len(updated_metrics['recent_traces'])}")
         
@@ -73,7 +73,7 @@ def test_arize_integration():
         # Show recent trace info
         if updated_metrics['recent_traces']:
             latest = updated_metrics['recent_traces'][-1]
-            print(f"\n📋 Latest trace info:")
+            print("\n📋 Latest trace info:")
             print(f"  - Trace ID: {latest['trace_id']}")
             print(f"  - Classification: {latest['classification_label']}")
             print(f"  - Confidence: {latest['confidence_score']}")
@@ -90,9 +90,9 @@ def test_arize_integration():
 if __name__ == "__main__":
     success = test_arize_integration()
     if success:
-        print(f"\n🎉 Arize OpenTelemetry integration test PASSED!")
-        print(f"📈 Check your Arize dashboard for the test data")
+        print("\n🎉 Arize OpenTelemetry integration test PASSED!")
+        print("📈 Check your Arize dashboard for the test data")
         sys.exit(0)
     else:
-        print(f"\n💥 Arize OpenTelemetry integration test FAILED!")
+        print("\n💥 Arize OpenTelemetry integration test FAILED!")
         sys.exit(1)

@@ -5,9 +5,21 @@ This module serves as the entry point for the classifier agent service,
 setting up the FastAPI application and starting the server.
 """
 
+import os
 import signal
 import sys
+from pathlib import Path
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+
+# Load environment variables explicitly before any other imports
+# This ensures .env is loaded regardless of where the script is run from
+env_path = Path(__file__).parent.parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
+    print(f"Loaded .env from: {env_path}")
+else:
+    print(f"Warning: .env file not found at {env_path}")
 
 import uvicorn
 from fastapi import FastAPI, Request

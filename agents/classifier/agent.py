@@ -24,7 +24,7 @@ from .domain.models import (
 )
 from shared.observability import get_logger, trace_decorator
 from shared.observability_enhanced import trace_llm_interaction, trace_agent_operation
-from shared.utils import sanitize_text, generate_message_id, extract_keywords
+from shared.utils import sanitize_text, generate_message_id
 from config.settings import settings
 
 
