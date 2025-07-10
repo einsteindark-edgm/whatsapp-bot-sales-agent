@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     docker_network: str = Field(
         default="whatsapp-assistant-network", description="Docker network name"
     )
+    
+    # Phoenix Evaluations Configuration
+    phoenix_enabled: bool = Field(default=False, env="PHOENIX_ENABLED", description="Enable Phoenix evaluations")
+    phoenix_eval_model: str = Field(default="gpt-4", env="PHOENIX_EVAL_MODEL", description="Model for evaluations")
+    phoenix_eval_concurrency: int = Field(default=4, env="PHOENIX_EVAL_CONCURRENCY", description="Evaluation concurrency")
+    
+    # Cost Threshold Configuration
+    cost_alert_per_call_usd: float = Field(default=0.05, env="COST_ALERT_PER_CALL_USD", description="Cost alert threshold per LLM call")
+    cost_alert_per_session_usd: float = Field(default=1.0, env="COST_ALERT_PER_SESSION_USD", description="Cost alert threshold per session")
+    
+    # Trace Configuration
+    trace_id_header: str = Field(default="X-Trace-ID", env="TRACE_ID_HEADER", description="HTTP header for trace ID")
 
     # Observability Configuration
     log_level: str = Field(default="INFO", description="Logging level")

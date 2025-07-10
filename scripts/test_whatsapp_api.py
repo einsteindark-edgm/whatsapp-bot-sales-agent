@@ -17,7 +17,7 @@ def test_send_message():
     """Test sending a message directly to WhatsApp API."""
     access_token = os.getenv("WHATSAPP_ACCESS_TOKEN")
     phone_number_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
-    api_version = os.getenv("WHATSAPP_API_VERSION", "v18.0")
+    api_version = os.getenv("WHATSAPP_API_VERSION", "v22.0")
     base_url = os.getenv("WHATSAPP_API_BASE_URL", "https://graph.facebook.com")
     
     url = f"{base_url}/{api_version}/{phone_number_id}/messages"

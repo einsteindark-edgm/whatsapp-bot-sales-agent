@@ -241,6 +241,9 @@ class WorkflowResponse(BaseModel):
     # Metadata
     processing_time: Optional[float] = Field(None, description="Processing time in seconds")
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="Response timestamp")
+    
+    # Token usage (for LLM tracking)
+    token_usage: Optional[Dict[str, int]] = Field(None, description="Token usage information")
 
     # Success/Error Information
     success: bool = Field(default=True, description="Whether the workflow completed successfully")

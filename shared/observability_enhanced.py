@@ -6,6 +6,7 @@ This module provides comprehensive observability features including:
 - Arize AX for LLM monitoring and evaluation
 - OpenTelemetry for distributed tracing
 - Custom metrics and performance monitoring
+- Cost tracking for LLM and WhatsApp usage
 """
 
 import logging
@@ -15,8 +16,12 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 import time
 import uuid
+import json
 from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
+
+# Import cost tracking
+from shared.observability_cost import CostCalculator, CostMetadata, session_cost_aggregator
 
 # Arize imports
 try:
@@ -81,11 +86,24 @@ class LLMTrace(BaseModel):
     latency_ms: float = Field(..., description="Response latency in milliseconds")
     token_count_input: Optional[int] = Field(None, description="Input token count")
     token_count_output: Optional[int] = Field(None, description="Output token count")
+    prompt_tokens: Optional[int] = Field(None, description="Prompt token count (alias for input)")
+    completion_tokens: Optional[int] = Field(None, description="Completion token count (alias for output)")
     classification_label: Optional[str] = Field(None, description="Classification result")
     confidence_score: Optional[float] = Field(None, description="Confidence score")
     agent_name: str = Field(..., description="Agent that made the request")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    cost_usd: Optional[float] = Field(None, description="Cost in USD")
+    
+    @property
+    def model(self) -> str:
+        """Alias for model_name for cost calculator compatibility."""
+        return self.model_name
+    
+    @property
+    def operation_name(self) -> str:
+        """Get operation name from metadata or agent name."""
+        return self.metadata.get("operation_name", f"{self.agent_name}_llm_interaction")
 
 
 class ArizeIntegration:
@@ -168,22 +186,47 @@ class ArizeIntegration:
                 
                 # Create span with LLM data
                 with tracer.start_as_current_span("llm_classification") as span:
-                    # Set span attributes for Arize
+                    # Set span attributes for Arize using correct OpenTelemetry semantic conventions
                     span.set_attributes({
+                        # Model attributes
+                        "llm.model": llm_trace.model_name,
                         "llm.request.model": llm_trace.model_name,
                         "llm.response.model": llm_trace.model_name,
-                        "llm.model_name": llm_trace.model_name,
-                        "llm.token_count.prompt": llm_trace.token_count_input or 0,
-                        "llm.token_count.completion": llm_trace.token_count_output or 0,
-                        "llm.latency": llm_trace.latency_ms,
-                        "llm.agent_name": llm_trace.agent_name,
-                        "llm.classification_label": llm_trace.classification_label or "unknown",
-                        "llm.confidence_score": llm_trace.confidence_score or 0.0,
+                        
+                        # Token counts - these are the key attributes Arize looks for
+                        "llm.token_count.prompt": int(llm_trace.token_count_input or 0),
+                        "llm.token_count.completion": int(llm_trace.token_count_output or 0),
+                        "llm.token_count.total": int((llm_trace.token_count_input or 0) + (llm_trace.token_count_output or 0)),
+                        "llm.usage.prompt_tokens": int(llm_trace.token_count_input or 0),
+                        "llm.usage.completion_tokens": int(llm_trace.token_count_output or 0),
+                        "llm.usage.total_tokens": int((llm_trace.token_count_input or 0) + (llm_trace.token_count_output or 0)),
+                        
+                        # Performance metrics
+                        "llm.latency": float(llm_trace.latency_ms),
+                        "llm.latency_ms": float(llm_trace.latency_ms),
+                        
+                        # Classification results
+                        "llm.output.classification": llm_trace.classification_label or "unknown",
+                        "llm.output.confidence": float(llm_trace.confidence_score or 0.0),
+                        
+                        # Cost tracking
+                        "llm.cost.usd": float(llm_trace.cost_usd or 0.0),
+                        "llm.cost.total": float(llm_trace.cost_usd or 0.0),
+                        
+                        # Input/Output
                         "input.value": llm_trace.prompt[:1000],  # Truncate long prompts
                         "output.value": llm_trace.response[:1000],  # Truncate long responses
+                        "llm.input.messages": json.dumps([{"role": "user", "content": llm_trace.prompt[:1000]}]),
+                        "llm.output.messages": json.dumps([{"role": "assistant", "content": llm_trace.response[:1000]}]),
+                        
+                        # Metadata
                         "session.id": llm_trace.trace_id,
-                        "user.id": llm_trace.agent_name,
+                        "user.id": llm_trace.metadata.get("user_id", llm_trace.agent_name),
                         "metadata.environment": settings.logfire_environment,
+                        "metadata.agent_name": llm_trace.agent_name,
+                        "metadata.channel": llm_trace.metadata.get("channel", "unknown"),
+                        "metadata.classification_label": llm_trace.classification_label or "unknown",
+                        "metadata.confidence_score": float(llm_trace.confidence_score or 0.0),
                     })
                     
                     logging.info(f"✅ Successfully sent LLM trace to Arize via OTel: {llm_trace.trace_id}")
@@ -419,6 +462,9 @@ class EnhancedObservability:
         self.otel = OpenTelemetryIntegration()
         self.llm_traces: List[LLMTrace] = []
         
+        # Initialize cost calculator
+        self.cost_calculator = CostCalculator()
+        
         # Configure structured logging
         self._configure_structured_logging()
     
@@ -465,7 +511,39 @@ class EnhancedObservability:
                             metadata: Optional[Dict[str, Any]] = None) -> str:
         """Trace LLM interaction across all platforms."""
         
-        trace_id = str(uuid.uuid4())
+        trace_id = metadata.get("trace_id") if metadata else None
+        if not trace_id:
+            trace_id = str(uuid.uuid4())
+        
+        # Calculate cost if token counts are provided
+        cost_usd = None
+        if token_count_input and token_count_output:
+            cost_usd = self.cost_calculator.calculate_llm_cost(
+                model=model_name,
+                prompt_tokens=token_count_input,
+                completion_tokens=token_count_output
+            )
+            
+            # Track cost
+            cost_metadata = {
+                "model": model_name,
+                "session_id": metadata.get("session_id") if metadata else trace_id,
+                "operation": f"{agent_name}_llm_interaction",
+                "agent_name": agent_name,
+                "user_id": metadata.get("user_id") if metadata else None,
+                "conversation_id": metadata.get("conversation_id") if metadata else None,
+                "channel": metadata.get("channel") if metadata else None,
+            }
+            
+            self.cost_calculator.track_cost(
+                cost_usd=cost_usd,
+                cost_type="llm",
+                metadata=cost_metadata
+            )
+            
+            # Add to session aggregator
+            session_id = cost_metadata.get("session_id", trace_id)
+            session_cost_aggregator.add_cost(session_id, cost_usd, "llm")
         
         llm_trace = LLMTrace(
             trace_id=trace_id,
@@ -475,10 +553,13 @@ class EnhancedObservability:
             latency_ms=latency_ms,
             token_count_input=token_count_input,
             token_count_output=token_count_output,
+            prompt_tokens=token_count_input,  # Set both for compatibility
+            completion_tokens=token_count_output,
             classification_label=classification_label,
             confidence_score=confidence_score,
             agent_name=agent_name,
-            metadata=metadata or {}
+            metadata=metadata or {},
+            cost_usd=cost_usd
         )
         
         # Store locally
@@ -593,11 +674,92 @@ class EnhancedObservability:
             except Exception as e:
                 logger.warning("Failed to log to Logfire", error=str(e))
     
+    async def trace_llm_interaction_with_cost_and_eval(
+        self,
+        trace_data: LLMTrace,
+        context: Optional[str] = None
+    ):
+        """Enhanced LLM tracing with cost and evaluations."""
+        
+        # Calculate cost
+        cost = self.cost_calculator.calculate_llm_cost(
+            model=trace_data.model,
+            prompt_tokens=trace_data.prompt_tokens or trace_data.token_count_input or 0,
+            completion_tokens=trace_data.completion_tokens or trace_data.token_count_output or 0
+        )
+        
+        # Track cost
+        self.cost_calculator.track_cost(
+            cost_usd=cost,
+            cost_type="llm",
+            metadata={
+                "model": trace_data.model,
+                "session_id": trace_data.trace_id,
+                "operation": trace_data.operation_name,
+                "agent_name": trace_data.agent_name,
+                **trace_data.metadata
+            }
+        )
+        
+        # Update trace data with cost
+        trace_data.cost_usd = cost
+        
+        # Original tracing
+        trace_id = self.trace_llm_interaction(
+            agent_name=trace_data.agent_name,
+            model_name=trace_data.model_name,
+            prompt=trace_data.prompt,
+            response=trace_data.response,
+            latency_ms=trace_data.latency_ms,
+            classification_label=trace_data.classification_label,
+            confidence_score=trace_data.confidence_score,
+            token_count_input=trace_data.token_count_input,
+            token_count_output=trace_data.token_count_output,
+            metadata={**trace_data.metadata, "trace_id": trace_data.trace_id}
+        )
+        
+        # Note: Evaluation integration is available through observability_evals.py
+        # To enable evaluations, import PhoenixEvaluator and configure in settings
+    
+    def trace_whatsapp_cost(
+        self,
+        message_type: str,
+        country: str = "US",
+        session_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ):
+        """Track WhatsApp message cost."""
+        
+        cost = self.cost_calculator.calculate_whatsapp_cost(message_type, country)
+        
+        if cost > 0:
+            cost_metadata = {
+                "message_type": message_type,
+                "country": country,
+                "session_id": session_id,
+                **(metadata or {})
+            }
+            
+            self.cost_calculator.track_cost(
+                cost_usd=cost,
+                cost_type="whatsapp",
+                metadata=cost_metadata
+            )
+            
+            # Add to session aggregator if session_id provided
+            if session_id:
+                session_cost_aggregator.add_cost(session_id, cost, "whatsapp")
+    
     def get_metrics_summary(self) -> Dict[str, Any]:
         """Get comprehensive metrics summary."""
+        
+        # Calculate total costs from traces
+        total_llm_cost = sum(trace.cost_usd or 0 for trace in self.llm_traces)
+        
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "total_llm_traces": len(self.llm_traces),
+            "total_llm_cost_usd": total_llm_cost,
             "integrations": {
                 "logfire_enabled": self.logfire.enabled,
                 "arize_enabled": self.arize.enabled,
@@ -605,6 +767,7 @@ class EnhancedObservability:
                 "otel_enabled": self.otel.enabled,
             },
             "recent_traces": [trace.model_dump() for trace in self.llm_traces[-5:]],
+            "session_costs": session_cost_aggregator.get_all_sessions(),
             "service_info": {
                 "name": settings.otel_service_name,
                 "version": settings.api_version,

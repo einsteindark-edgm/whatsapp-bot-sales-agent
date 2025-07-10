@@ -10,12 +10,25 @@ pydantic-ai[gemini]==0.0.13
 google-adk==0.4.0
 
 # Observability
-pydantic-logfire==0.5.0
+logfire>=0.46.0
 structlog==23.2.0
 arize==7.46.0
-opentelemetry-api==1.34.1
-opentelemetry-sdk==1.34.1
-opentelemetry-exporter-otlp==1.34.1
+arize-otel>=0.3.0
+opentelemetry-api>=1.25.0
+opentelemetry-sdk>=1.25.0
+opentelemetry-exporter-otlp>=1.25.0
+opentelemetry-instrumentation-fastapi>=0.45b0
+opentelemetry-instrumentation-httpx>=0.45b0
+
+# OpenInference for LLM instrumentation
+openinference-instrumentation-openai>=0.1.0
+openinference-instrumentation-google-genai>=0.1.0
+
+# Phoenix Evaluations
+arize-phoenix[evals]>=0.8.0
+
+# Cost Tracking
+tokencost>=0.1.0
 
 # Development Dependencies
 pytest==7.4.3

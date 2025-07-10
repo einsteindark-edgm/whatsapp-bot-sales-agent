@@ -20,7 +20,7 @@ from .domain.models import (
     OrchestrationConfig,
 )
 from .adapters.outbound.http_a2a_client import A2AHttpClient
-from shared.observability import get_logger
+from shared.observability import get_logger, trace_decorator
 from shared.observability_enhanced import trace_agent_operation
 from shared.a2a_protocol import ClassificationRequest
 
@@ -96,6 +96,7 @@ class WorkflowOrchestrator:
                 "timestamp": datetime.utcnow().isoformat(),
             }
 
+    @trace_decorator("process_workflow", "orchestrator")
     async def process_workflow_request(
         self, request: WorkflowRequest, trace_id: str
     ) -> WorkflowResponse:
@@ -138,6 +139,21 @@ class WorkflowOrchestrator:
                 trace_id=trace_id,
                 payload={"text": request.user_message},
             )
+            
+            # Trace the orchestrator's decision to request classification
+            trace_agent_operation(
+                agent_name="orchestrator",
+                operation_name="request_classification",
+                trace_id=trace_id,
+                status="started",
+                metadata={
+                    "message_length": len(request.user_message),
+                    "session_id": request.session_id,
+                    "user_id": request.user_id,
+                    "conversation_state": conversation.state.value,
+                    "_tags": ["orchestration", "classification_request"],
+                }
+            )
 
             # Get classification from classifier service
             from config.settings import settings
@@ -155,6 +171,25 @@ class WorkflowOrchestrator:
                 label=classification_data.get("label"),
                 confidence=classification_data.get("confidence"),
                 trace_id=trace_id,
+            )
+            
+            # Trace the orchestrator's decision when receiving classification
+            response_type = self._determine_response_type(classification_data)
+            trace_agent_operation(
+                agent_name="orchestrator",
+                operation_name="classification_received",
+                trace_id=trace_id,
+                status="completed",
+                duration=0,  # Instant decision
+                metadata={
+                    "classification_label": classification_data.get("label"),
+                    "classification_confidence": classification_data.get("confidence"),
+                    "response_type_decision": response_type.value,
+                    "requires_handoff": classification_data.get("confidence", 1.0) < self._config.handoff_threshold,
+                    "session_id": request.session_id,
+                    "user_id": request.user_id,
+                    "_tags": ["orchestration", "classification_received", response_type.value],
+                }
             )
 
             # Generate response based on classification
@@ -204,6 +239,7 @@ class WorkflowOrchestrator:
                 conversation_state=ConversationState.COMPLETED,
                 processing_time=final_processing_time,
                 success=True,
+                token_usage=classification_data.get("token_usage"),  # Include token usage
             )
 
         except Exception as e:

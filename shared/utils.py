@@ -167,6 +167,17 @@ class AsyncHTTPClient:
             raise RuntimeError("HTTP client not initialized. Use async context manager.")
 
         merged_headers = {**self.default_headers, **(headers or {})}
+        
+        # Inject trace ID from context if not already present
+        if "X-Trace-ID" not in merged_headers and "X-Trace-Id" not in merged_headers:
+            try:
+                from shared.observability_middleware import get_current_trace_id
+                trace_id = get_current_trace_id()
+                if trace_id:
+                    merged_headers["X-Trace-ID"] = trace_id
+            except ImportError:
+                pass  # Observability middleware not available
+        
         last_exception = None
 
         for attempt in range(1, self.retry_config.max_attempts + 1):

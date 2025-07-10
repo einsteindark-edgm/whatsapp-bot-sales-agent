@@ -31,6 +31,7 @@ from agents.classifier.adapters.inbound.fastapi_router import router
 from agents.classifier.agent import classifier_agent
 from shared.observability import get_logger
 from shared.observability_enhanced import enhanced_observability
+from shared.observability_setup import initialize_app_observability, shutdown_observability
 from config.settings import settings
 
 
@@ -55,6 +56,10 @@ async def lifespan(app: FastAPI):
     )
 
     try:
+        # Initialize observability
+        initialize_app_observability(app, settings)
+        logger.info("Observability initialized successfully")
+
         # Initialize classifier agent
         await classifier_agent.health_check()
         logger.info("Classifier agent initialized successfully")
@@ -68,6 +73,10 @@ async def lifespan(app: FastAPI):
     finally:
         # Shutdown
         logger.info("Shutting down classifier service")
+        
+        # Shutdown observability
+        shutdown_observability()
+        logger.info("Observability shutdown complete")
 
 
 # Create FastAPI application

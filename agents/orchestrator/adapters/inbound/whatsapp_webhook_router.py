@@ -13,6 +13,7 @@ import os
 import json
 from shared.observability import get_logger
 from shared.observability_enhanced import trace_context
+from shared.observability_cost import CostCalculator, session_cost_aggregator
 from agents.orchestrator.domain.whatsapp_models import WhatsAppWebhookPayload
 from agents.orchestrator.domain.models import WorkflowRequest
 from agents.orchestrator.adapters.inbound.fastapi_router import get_trace_id
@@ -128,26 +129,54 @@ async def process_webhook(
     # Parse webhook payload
     try:
         data = json.loads(body)
-        webhook_payload = WhatsAppWebhookPayload(**data)
     except Exception as e:
         logger.error(
-            f"Failed to parse webhook payload: {e}",
+            f"Failed to parse webhook body: {e}",
             extra={"trace_id": trace_id, "error": str(e)},
         )
-        # Return 200 to prevent retries from WhatsApp
+        return {"status": "error", "message": "Invalid JSON"}
+    
+    # Use the shared function to process the payload
+    return await _process_webhook_payload(data, trace_id)
+
+
+@router.post("/whatsapp/test")
+async def process_webhook_test(
+    request: Request,
+    trace_id: str = Depends(get_trace_id),
+) -> Dict[str, Any]:
+    """
+    Test endpoint for WhatsApp webhook without signature verification.
+    FOR DEVELOPMENT ONLY - DO NOT USE IN PRODUCTION.
+    """
+    logger.warning("Using test webhook endpoint without signature verification")
+    
+    # Parse body
+    body = await request.body()
+    data = json.loads(body)
+    
+    # Process as normal webhook but skip signature verification
+    return await _process_webhook_payload(data, trace_id)
+
+
+async def _process_webhook_payload(data: dict, trace_id: str) -> Dict[str, Any]:
+    """
+    Process webhook payload (extracted for reuse).
+    """
+    try:
+        webhook_payload = WhatsAppWebhookPayload(**data)
+    except Exception as e:
+        logger.error(f"Failed to parse webhook payload: {e}", extra={"trace_id": trace_id})
         return {"status": "error", "message": "Invalid payload"}
 
-    # Use trace context for the entire processing
     async with trace_context(
         operation_name="whatsapp_message_processing",
         trace_id=trace_id,
         agent_name="whatsapp_adapter",
         metadata={"webhook_type": "message"}
     ) as trace_info:
-        # Extract message data
         message_data = webhook_payload.extract_message()
         if not message_data:
-            # Could be a status update or other event
             status_update = webhook_payload.extract_status_update()
             if status_update:
                 logger.info(
@@ -173,16 +202,10 @@ async def process_webhook(
         )
 
         try:
-            # Initialize WhatsApp client
             whatsapp_client = WhatsAppAPIClient()
-
-            # Send typing indicator
             await whatsapp_client.send_typing_indicator(sender, trace_id=trace_id)
-
-            # Mark message as read
             await whatsapp_client.mark_message_as_read(message_id, trace_id=trace_id)
 
-            # Create workflow request
             workflow_request = WorkflowRequest(
                 user_message=text,
                 user_id=sender,
@@ -196,29 +219,20 @@ async def process_webhook(
                 },
             )
 
-            # Process through orchestrator directly (we're in the same service)
-            logger.info(
-                "Processing WhatsApp message through orchestrator",
-                extra={
-                    "trace_id": trace_id,
-                    "user_id": sender,
-                    "message_length": len(text),
-                }
-            )
-
             workflow_response = await process_workflow_request_async(
                 request=workflow_request,
                 trace_id=trace_id
             )
 
-            # Extract response text and classification
             response_text = workflow_response.response
             classification = workflow_response.classification
 
-            # Track LLM interaction for observability
             from shared.observability_enhanced import enhanced_observability
             
             if classification:
+                # Extract token usage if available
+                token_usage = workflow_response.token_usage or {}
+                
                 enhanced_observability.trace_llm_interaction(
                     agent_name="whatsapp_adapter",
                     model_name=settings.model_name,
@@ -227,29 +241,76 @@ async def process_webhook(
                     latency_ms=workflow_response.processing_time * 1000 if workflow_response.processing_time else 0,
                     classification_label=classification.get("label") if classification else None,
                     confidence_score=classification.get("confidence") if classification else None,
+                    token_count_input=token_usage.get("input"),
+                    token_count_output=token_usage.get("output"),
                     metadata={
                         "channel": "whatsapp",
                         "sender": sender,
                         "message_id": message_id,
-                        "trace_id": trace_id
+                        "trace_id": trace_id,
+                        "user_id": sender,
+                        "session_id": f"whatsapp_{sender}",
+                        "conversation_id": f"whatsapp_{sender}_{message_id}",
                     }
                 )
 
-            logger.info(
-                "Sending WhatsApp response",
-                extra={
-                    "trace_id": trace_id,
-                    "recipient": sender,
-                    "classification_type": classification.get("label") if classification else None,
-                    "confidence": classification.get("confidence") if classification else None,
-                },
-            )
-
-            # Send response back via WhatsApp
             await whatsapp_client.send_text_message(
                 to=sender,
                 message=response_text,
                 trace_id=trace_id,
+            )
+            
+            # Track WhatsApp message costs
+            if classification:
+                label = classification.get("label", "").lower()
+                if label == "pqr":
+                    message_type = "utility"
+                else:
+                    message_type = "service"
+            else:
+                message_type = "service"
+            
+            country = "US"
+            if sender.startswith("52"):
+                country = "MX"
+            elif sender.startswith("55"):
+                country = "BR"
+            elif sender.startswith("91"):
+                country = "IN"
+            elif sender.startswith("44"):
+                country = "GB"
+            
+            whatsapp_cost = CostCalculator.calculate_whatsapp_cost(
+                message_type=message_type,
+                country=country
+            )
+            
+            CostCalculator.track_cost(
+                cost_usd=whatsapp_cost,
+                cost_type="whatsapp",
+                metadata={
+                    "message_type": message_type,
+                    "country": country,
+                    "channel": "whatsapp",
+                    "sender": sender,
+                    "message_id": message_id,
+                    "trace_id": trace_id,
+                    "classification": classification.get("label") if classification else None,
+                    "session_id": f"whatsapp_{sender}",
+                }
+            )
+            
+            session_id = f"whatsapp_{sender}"
+            session_cost_aggregator.add_cost(session_id, whatsapp_cost, "whatsapp")
+            
+            logger.info(
+                "WhatsApp message cost tracked",
+                cost_usd=whatsapp_cost,
+                cost_formatted=CostCalculator.format_cost(whatsapp_cost),
+                message_type=message_type,
+                country=country,
+                trace_id=trace_id,
+                session_id=session_id,
             )
 
             return {
@@ -257,6 +318,10 @@ async def process_webhook(
                 "processed": True,
                 "message_id": message_id,
                 "classification": classification.get("label") if classification else None,
+                "cost": {
+                    "whatsapp": CostCalculator.format_cost(whatsapp_cost),
+                    "message_type": message_type,
+                }
             }
 
         except Exception as e:
@@ -270,7 +335,6 @@ async def process_webhook(
                 },
             )
 
-            # Try to send error message to user
             try:
                 whatsapp_client = WhatsAppAPIClient()
                 await whatsapp_client.send_text_message(
@@ -278,13 +342,40 @@ async def process_webhook(
                     message="Lo siento, ocurrió un error al procesar tu mensaje. Por favor, intenta nuevamente más tarde.",
                     trace_id=trace_id,
                 )
+                
+                country = "US"
+                if sender.startswith("52"):
+                    country = "MX"
+                elif sender.startswith("55"):
+                    country = "BR"
+                
+                error_message_cost = CostCalculator.calculate_whatsapp_cost(
+                    message_type="utility",
+                    country=country
+                )
+                
+                CostCalculator.track_cost(
+                    cost_usd=error_message_cost,
+                    cost_type="whatsapp",
+                    metadata={
+                        "message_type": "utility",
+                        "country": country,
+                        "channel": "whatsapp",
+                        "sender": sender,
+                        "trace_id": trace_id,
+                        "error_response": True,
+                        "session_id": f"whatsapp_{sender}",
+                    }
+                )
+                
+                session_cost_aggregator.add_cost(f"whatsapp_{sender}", error_message_cost, "whatsapp")
+                
             except Exception as send_error:
                 logger.error(
                     f"Failed to send error message: {send_error}",
                     extra={"trace_id": trace_id},
                 )
 
-            # Always return 200 to prevent WhatsApp retries
             return {"status": "error", "message": str(e)}
 
 

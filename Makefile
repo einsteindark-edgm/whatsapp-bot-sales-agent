@@ -404,6 +404,49 @@ clean-all: clean clean-docker clean-venv ## Clean everything
 	$(call print_success,"Everything cleaned")
 
 # =======================================================
+# Observability Testing
+# =======================================================
+
+test-observability: venv ## Run complete observability tests
+	$(call print_section,"Running Observability Tests")
+	@$(VENV_NAME)/bin/python test_observability_complete.py
+	$(call print_success,"Observability tests completed")
+
+test-costs: venv ## Test cost calculations
+	$(call print_section,"Testing Cost Calculations")
+	@$(VENV_NAME)/bin/python test_cost_calculations.py
+	$(call print_success,"Cost calculation tests completed")
+
+test-tracking: venv ## Test decision tracking
+	$(call print_section,"Testing Decision Tracking")
+	@$(VENV_NAME)/bin/python test_decision_tracking.py
+	$(call print_success,"Decision tracking tests completed")
+
+test-arize: venv ## Test Arize integration
+	$(call print_section,"Testing Arize Integration")
+	@$(VENV_NAME)/bin/python test_observability.py
+	$(call print_success,"Arize integration tests completed")
+
+check-observability: ## Check observability metrics endpoint
+	$(call print_section,"Checking Observability Status")
+	@curl -s http://localhost:8001/api/v1/observability-metrics | jq '.' || \
+		$(call print_warning,"Metrics endpoint not available - ensure services are running")
+
+observability-report: venv ## Generate observability report
+	$(call print_section,"Generating Observability Report")
+	@$(VENV_NAME)/bin/python -c "from shared.observability import get_metrics_summary; \
+		from shared.observability_cost import session_cost_aggregator; \
+		import json; \
+		metrics = get_metrics_summary(); \
+		sessions = session_cost_aggregator.get_all_sessions(); \
+		print('📊 Observability Report'); \
+		print('=' * 50); \
+		print(json.dumps(metrics, indent=2, default=str)); \
+		print('\n💰 Session Costs:'); \
+		for sid, costs in sessions.items(): \
+			print(f'  {sid}: Total=$${costs[\"total\"]:.6f}')"
+
+# =======================================================
 # Release and Deployment
 # =======================================================
 

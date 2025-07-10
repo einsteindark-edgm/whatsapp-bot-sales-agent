@@ -32,6 +32,7 @@ from agents.orchestrator.adapters.inbound.whatsapp_webhook_router import router 
 from agents.orchestrator.agent import orchestrator_agent
 from shared.observability import get_logger
 from shared.observability_enhanced import enhanced_observability
+from shared.observability_setup import initialize_app_observability, shutdown_observability
 from config.settings import settings
 
 
@@ -56,6 +57,10 @@ async def lifespan(app: FastAPI):
     )
 
     try:
+        # Initialize observability
+        initialize_app_observability(app, settings)
+        logger.info("Observability initialized successfully")
+
         # Initialize orchestrator agent
         await orchestrator_agent.health_check()
         logger.info("Orchestrator agent initialized successfully")
@@ -69,6 +74,10 @@ async def lifespan(app: FastAPI):
     finally:
         # Shutdown
         logger.info("Shutting down orchestrator service")
+        
+        # Shutdown observability
+        shutdown_observability()
+        logger.info("Observability shutdown complete")
 
 
 # Create FastAPI application

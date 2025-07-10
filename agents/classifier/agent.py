@@ -24,6 +24,7 @@ from .domain.models import (
 )
 from shared.observability import get_logger, trace_decorator
 from shared.observability_enhanced import trace_llm_interaction, trace_agent_operation
+from shared.observability_cost import CostCalculator, session_cost_aggregator
 from shared.utils import sanitize_text, generate_message_id
 from config.settings import settings
 
@@ -157,6 +158,45 @@ Always respond with high confidence (>0.7) unless the message is genuinely ambig
             result = await self._agent.run(
                 user_prompt=f"Classify this message: {sanitized_text}", deps=deps
             )
+            
+            # Get actual token usage from PydanticAI
+            usage = result.usage()
+            
+            # Calculate and track cost if usage is available
+            if usage:
+                llm_cost = CostCalculator.calculate_llm_cost(
+                    model=self.config.model_name,
+                    prompt_tokens=usage.request_tokens,
+                    completion_tokens=usage.response_tokens
+                )
+                
+                # Track cost with metadata
+                CostCalculator.track_cost(
+                    cost_usd=llm_cost,
+                    cost_type="llm",
+                    metadata={
+                        "model": self.config.model_name,
+                        "operation": "classification",
+                        "agent_name": "classifier",
+                        "trace_id": trace_id,
+                        "prompt_tokens": usage.request_tokens,
+                        "completion_tokens": usage.response_tokens,
+                        "total_tokens": usage.total_tokens,
+                    }
+                )
+                
+                # Add to session cost if we have a session ID
+                # For now, use trace_id as session_id
+                session_cost_aggregator.add_cost(trace_id, llm_cost, "llm")
+                
+                logger.info(
+                    "LLM cost tracked",
+                    cost_usd=llm_cost,
+                    model=self.config.model_name,
+                    prompt_tokens=usage.request_tokens,
+                    completion_tokens=usage.response_tokens,
+                    trace_id=trace_id,
+                )
 
             # Extract keywords if requested
             keywords = []
@@ -192,7 +232,21 @@ Always respond with high confidence (>0.7) unless the message is genuinely ambig
                 trace_id=trace_id,
             )
 
-            # Enhanced observability - trace LLM interaction
+            # Enhanced observability - trace LLM interaction with actual token counts
+            metadata = {
+                "text_length": len(sanitized_text),
+                "keywords": keywords,
+                "trace_id": trace_id,
+                "include_reasoning": include_reasoning,
+                "total_tokens": usage.total_tokens if usage else None,
+                "model_requests": usage.requests if usage else None,
+            }
+            
+            # Add cost information if available
+            if usage and 'llm_cost' in locals():
+                metadata["cost_usd"] = llm_cost
+                metadata["cost_formatted"] = CostCalculator.format_cost(llm_cost)
+            
             trace_llm_interaction(
                 agent_name="classifier",
                 model_name=self.config.model_name,
@@ -201,14 +255,39 @@ Always respond with high confidence (>0.7) unless the message is genuinely ambig
                 latency_ms=processing_time * 1000,  # Convert to milliseconds
                 classification_label=classification.label,
                 confidence_score=classification.confidence,
-                token_count_input=len(sanitized_text.split()),  # Approximate token count
-                token_count_output=len(str(result.data).split()),  # Approximate token count
-                metadata={
-                    "text_length": len(sanitized_text),
-                    "keywords": keywords,
-                    "trace_id": trace_id,
-                    "include_reasoning": include_reasoning,
-                }
+                token_count_input=usage.request_tokens if usage else len(sanitized_text.split()),  # Use actual tokens if available
+                token_count_output=usage.response_tokens if usage else len(str(result.data).split()),  # Use actual tokens if available
+                metadata=metadata
+            )
+            
+            # Trace the classification decision with detailed attributes
+            decision_metadata = {
+                "decision_label": classification.label,
+                "decision_confidence": classification.confidence,
+                "reasoning": classification.reasoning if include_reasoning else None,
+                "keywords": keywords,
+                "token_usage": {
+                    "input": usage.request_tokens if usage else None,
+                    "output": usage.response_tokens if usage else None,
+                    "total": usage.total_tokens if usage else None,
+                },
+                "confidence_threshold": confidence_threshold or self.config.confidence_threshold,
+                "above_threshold": classification.confidence >= (confidence_threshold or self.config.confidence_threshold),
+                "_tags": ["classification", classification.label, f"confidence_{int(classification.confidence * 100)}"],
+            }
+            
+            # Add cost to decision metadata
+            if usage and 'llm_cost' in locals():
+                decision_metadata["cost_usd"] = llm_cost
+                decision_metadata["cost_formatted"] = CostCalculator.format_cost(llm_cost)
+            
+            trace_agent_operation(
+                agent_name="classifier",
+                operation_name="classification_decision",
+                trace_id=trace_id,
+                status="completed",
+                duration=processing_time,
+                metadata=decision_metadata
             )
 
             return classification
